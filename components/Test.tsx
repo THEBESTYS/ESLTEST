@@ -17,36 +17,52 @@ const Test: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<EvaluationResult[]>([]);
   const [errorToast, setErrorToast] = useState<string | null>(null);
-  const [hasKey, setHasKey] = useState<boolean>(!!process.env.API_KEY);
+  
+  // 초기 상태를 구글 시스템에 직접 물어봅니다.
+  const [hasKey, setHasKey] = useState<boolean>(false);
+  const [isConnecting, setIsConnecting] = useState(false);
 
-  // 실시간으로 process.env.API_KEY 주입 여부 감시
   useEffect(() => {
-    const checkKeyInterval = setInterval(() => {
-      const isKeyAvailable = !!process.env.API_KEY;
-      if (isKeyAvailable !== hasKey) {
-        setHasKey(isKeyAvailable);
+    const checkActualKeyStatus = async () => {
+      const aiStudio = (window as any).aistudio;
+      if (aiStudio) {
+        const isSelected = await aiStudio.hasSelectedApiKey();
+        if (isSelected) {
+          setHasKey(true);
+        }
+      } else if (process.env.API_KEY) {
+        // 로컬 환경이나 이미 주입된 경우
+        setHasKey(true);
       }
-    }, 500);
-    return () => clearInterval(checkKeyInterval);
-  }, [hasKey]);
+    };
+
+    checkActualKeyStatus();
+    // 주기적으로 체크하여 상태 변경을 감지합니다.
+    const interval = setInterval(checkActualKeyStatus, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleOpenKeySelector = async () => {
     const aiStudio = (window as any).aistudio;
     if (aiStudio) {
-      await aiStudio.openSelectKey();
-      // 선택 직후 UI 업데이트를 위해 약간의 지연 후 체크
-      setTimeout(() => setHasKey(!!process.env.API_KEY), 500);
+      try {
+        setIsConnecting(true);
+        await aiStudio.openSelectKey();
+        
+        // 중요: 구글 지침에 따라 선택 창을 닫으면 즉시 성공한 것으로 간주하고 진행합니다.
+        setHasKey(true);
+        setIsConnecting(false);
+      } catch (e) {
+        setIsConnecting(false);
+        setErrorToast("키 선택 창을 여는 중 문제가 발생했습니다.");
+      }
     } else {
       window.open('https://aistudio.google.com/app/apikey', '_blank');
-      setErrorToast("Google AI Studio에서 API 키를 생성하고 설정해주세요.");
+      setErrorToast("자동 키 선택이 지원되지 않는 환경입니다. 직접 키를 확인해주세요.");
     }
   };
 
   const handleStartRecording = async () => {
-    if (!process.env.API_KEY) {
-      setErrorToast("API 키를 먼저 연결해주세요.");
-      return;
-    }
     try {
       setErrorToast(null);
       await audioManager.startRecording();
@@ -62,10 +78,12 @@ const Test: React.FC = () => {
     setIsAnalyzing(true);
     try {
       const audioBlob = await audioManager.stopRecording();
+      // 매번 분석 시점에 최신 API 인스턴스를 사용하도록 Evaluation 로직 내부에서 처리됨
       const evaluation = await aiEvaluator.analyzeSpeech(audioBlob, TEST_SENTENCES[currentIndex].text);
       
-      // 키 에러 등으로 인한 실패 처리
-      if (evaluation.accuracy === 0 && (evaluation.feedback.includes("API") || evaluation.feedback.includes("키"))) {
+      // 만약 키 문제로 분석이 실패했다면 다시 키 선택 화면으로 보냅니다.
+      if (evaluation.accuracy === 0 && evaluation.feedback.includes("API 키")) {
+        setHasKey(false);
         setErrorToast(evaluation.feedback);
         setIsAnalyzing(false);
         return;
@@ -83,7 +101,7 @@ const Test: React.FC = () => {
         }
       }, 800);
     } catch (error) {
-      setErrorToast("분석 중 오류가 발생했습니다.");
+      setErrorToast("분석 중 오류가 발생했습니다. 다시 시도해주세요.");
       setIsAnalyzing(false);
     }
   };
@@ -114,48 +132,41 @@ const Test: React.FC = () => {
     navigate(`/result/${attempt.id}`);
   };
 
-  // 키가 없을 때 보여줄 전용 가이드 화면
   if (!hasKey) {
     return (
       <div className="flex-grow flex items-center justify-center p-6 bg-slate-50">
-        <div className="max-w-md w-full bg-white rounded-[2.5rem] shadow-2xl shadow-blue-100 p-10 border border-slate-100 text-center">
-          <div className="w-20 h-20 bg-amber-100 rounded-3xl flex items-center justify-center text-4xl mx-auto mb-8 animate-bounce">
-            🔑
+        <div className="max-w-md w-full bg-white rounded-[2.5rem] shadow-2xl shadow-blue-100 p-10 border border-slate-100">
+          <div className="text-center">
+            <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-6">
+              🛡️
+            </div>
+            <h2 className="text-2xl font-black text-slate-800 mb-2">분석 준비 완료</h2>
+            <p className="text-slate-500 mb-8 text-sm leading-relaxed">
+              구글 AI 스튜디오에서 프로젝트를 선택하셨다면 아래 버튼을 눌러 바로 시작하세요.
+            </p>
           </div>
-          <h2 className="text-2xl font-black text-slate-800 mb-4">API 키 연결이 필요합니다</h2>
-          <p className="text-slate-500 mb-8 leading-relaxed">
-            방금 발급받으신 API 키를 앱에 연결해야 분석 기능을 사용할 수 있습니다.
-          </p>
           
           <div className="space-y-4 mb-10 text-left">
-            <div className="flex items-center space-x-4 p-4 bg-slate-50 rounded-2xl">
-              <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold text-sm">1</div>
-              <p className="text-sm font-bold text-slate-700">아래 주황색 버튼을 클릭하세요.</p>
-            </div>
-            <div className="flex items-center space-x-4 p-4 bg-slate-50 rounded-2xl">
-              <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold text-sm">2</div>
-              <p className="text-sm font-bold text-slate-700">팝업 목록에서 키가 있는 프로젝트를 선택하세요.</p>
+            <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
+              <p className="text-xs font-bold text-emerald-800 mb-1">✅ 프로젝트 선택 확인</p>
+              <p className="text-[11px] text-emerald-700 leading-relaxed">
+                이미 프로젝트를 선택하셨는데도 이 화면이 보인다면, 아래 버튼을 다시 한 번 눌러주세요. 시스템이 즉시 연결을 승인합니다.
+              </p>
             </div>
           </div>
 
           <button 
             onClick={handleOpenKeySelector}
-            className="w-full py-4 bg-amber-500 hover:bg-amber-600 text-white font-black text-lg rounded-2xl shadow-lg shadow-amber-100 transition-all active:scale-95 flex items-center justify-center space-x-3"
+            disabled={isConnecting}
+            className={`w-full py-4 ${isConnecting ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700'} text-white font-black text-lg rounded-2xl shadow-lg shadow-blue-100 transition-all active:scale-95 flex items-center justify-center space-x-3`}
           >
-            <span>API 키 선택하기</span>
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
-            </svg>
+            <span>{isConnecting ? '연결 확인 중...' : '테스트 시작하기'}</span>
+            {!isConnecting && (
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+              </svg>
+            )}
           </button>
-
-          <a 
-            href="https://aistudio.google.com/app/apikey" 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="inline-block mt-6 text-xs font-bold text-slate-400 hover:text-blue-600 transition-colors underline"
-          >
-            아직 키를 못 받으셨나요? 여기서 발급받기
-          </a>
         </div>
       </div>
     );
@@ -164,7 +175,6 @@ const Test: React.FC = () => {
   return (
     <div className="flex-grow flex flex-col items-center justify-center p-4">
       <div className="max-w-3xl w-full">
-        {/* Progress */}
         <div className="mb-8">
           <div className="flex justify-between items-center mb-2 text-sm font-bold">
             <span className="text-slate-400 uppercase tracking-tighter">Sentence {currentIndex + 1} / 50</span>
@@ -175,12 +185,17 @@ const Test: React.FC = () => {
           </div>
         </div>
 
-        {/* Ready Notification */}
-        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center justify-center space-x-2 text-emerald-700 font-bold text-sm shadow-sm animate-in slide-in-from-top-4">
+        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center justify-center space-x-2 text-emerald-700 font-bold text-sm shadow-sm">
           <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
           </svg>
-          <span>AI 분석 준비가 완료되었습니다!</span>
+          <span>AI 분석 엔진이 활성화되었습니다.</span>
+          <button 
+            onClick={() => setHasKey(false)} 
+            className="ml-4 text-[10px] underline opacity-60 hover:opacity-100"
+          >
+            연결 재설정
+          </button>
         </div>
 
         {errorToast && (
@@ -189,7 +204,6 @@ const Test: React.FC = () => {
           </div>
         )}
 
-        {/* Test UI */}
         <div className="bg-white rounded-[40px] shadow-2xl shadow-slate-200 border border-slate-100 p-8 md:p-16 text-center">
           <div className="mb-12">
             <h2 className="text-3xl md:text-4xl font-black text-slate-800 leading-tight">

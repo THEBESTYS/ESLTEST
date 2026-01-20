@@ -16,16 +16,15 @@ const EVALUATION_SCHEMA = {
 
 export class AIEvaluator {
   async analyzeSpeech(audioBlob: Blob, targetText: string): Promise<EvaluationResult> {
+    // API 호출 직전에 최신 키를 가져옵니다.
     const apiKey = process.env.API_KEY;
     
     if (!apiKey) {
-      const aiStudio = (window as any).aistudio;
-      if (aiStudio) await aiStudio.openSelectKey();
-      return this.getErrorResult("분석을 위해 API 키 선택이 필요합니다.");
+      return this.getErrorResult("API 키가 아직 준비되지 않았습니다. 잠시 후 다시 시도하거나 프로젝트를 다시 선택해주세요.");
     }
 
     try {
-      // 분석 호출마다 새로운 인스턴스를 생성하여 최신 주입된 키를 사용하도록 함
+      // 매번 새로운 인스턴스를 생성하여 주입된 최신 키를 사용합니다.
       const ai = new GoogleGenAI({ apiKey });
 
       const base64Data = await new Promise<string>((resolve, reject) => {
@@ -73,14 +72,13 @@ export class AIEvaluator {
       // 특정 API 키 관련 오류(Requested entity was not found 등) 대응
       if (errorMessage.includes("Requested entity was not found") || 
           errorMessage.includes("API key") || 
-          errorMessage.includes("403")) {
+          errorMessage.includes("403") ||
+          errorMessage.includes("invalid")) {
         
-        const aiStudio = (window as any).aistudio;
-        if (aiStudio) await aiStudio.openSelectKey();
-        return this.getErrorResult("API 키 프로젝트가 올바르지 않거나 유료 설정이 필요합니다. 다시 선택해주세요.");
+        return this.getErrorResult("API 키 설정에 문제가 발견되었습니다. 다시 한 번 프로젝트를 선택해주세요.");
       }
       
-      return this.getErrorResult("일시적인 오류가 발생했습니다. 다시 시도해 주세요.");
+      return this.getErrorResult("분석 도중 일시적인 오류가 발생했습니다. 다시 시도해 주세요.");
     }
   }
 
