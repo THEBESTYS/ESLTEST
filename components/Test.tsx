@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { TEST_SENTENCES } from '../constants';
 import { AudioManager } from '../services/audio';
@@ -16,7 +16,6 @@ const Test: React.FC = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<EvaluationResult[]>([]);
-  const [currentAudio, setCurrentAudio] = useState<Blob | null>(null);
   const [permissionError, setPermissionError] = useState(false);
 
   const currentSentence = TEST_SENTENCES[currentIndex];
@@ -38,19 +37,18 @@ const Test: React.FC = () => {
     setIsAnalyzing(true);
     try {
       const audioBlob = await audioManager.stopRecording();
-      setCurrentAudio(audioBlob);
 
       const evaluation = await aiEvaluator.analyzeSpeech(audioBlob, currentSentence.text);
-      setResults(prev => [...prev, evaluation]);
+      const newResults = [...results, evaluation];
+      setResults(newResults);
 
       // Automatic next after a brief delay
       setTimeout(() => {
         if (currentIndex < TEST_SENTENCES.length - 1) {
           setCurrentIndex(prev => prev + 1);
           setIsAnalyzing(false);
-          setCurrentAudio(null);
         } else {
-          finishTest([...results, evaluation]);
+          finishTest(newResults);
         }
       }, 1500);
     } catch (error) {
@@ -174,7 +172,7 @@ const Test: React.FC = () => {
               ) : (
                 <div className="flex flex-col items-center">
                   <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4" />
-                  <p className="text-blue-600 font-bold">AI가 분석 중입니다...</p>
+                  <p className="text-blue-600 font-bold text-lg">AI가 분석 중입니다...</p>
                 </div>
               )}
 

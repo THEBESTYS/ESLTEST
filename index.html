@@ -13,19 +13,34 @@
       font-family: 'Inter', sans-serif;
     }
   </style>
-<script type="importmap">
+  <script>
+    /**
+     * Shim for process.env to prevent ReferenceError in the browser.
+     * The Gemini SDK expects process.env.API_KEY to be available.
+     */
+    window.process = {
+      env: {
+        API_KEY: "" 
+      }
+    };
+  </script>
+  <script type="importmap">
 {
   "imports": {
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0?deps=react@19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client?deps=react@19.0.0",
+    "react-router-dom": "https://esm.sh/react-router-dom@6.28.1?deps=react@19.0.0",
+    "@google/genai": "https://esm.sh/@google/genai@1.3.0",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react-router-dom": "https://esm.sh/react-router-dom@^7.12.0",
-    "@google/genai": "https://esm.sh/@google/genai@^1.37.0"
+    "react/": "https://esm.sh/react@^19.2.3/"
   }
 }
 </script>
 </head>
 <body class="bg-slate-50 text-slate-900">
   <div id="root"></div>
+  <!-- Entry point for the React application -->
+  <script type="module" src="index.tsx"></script>
 </body>
 </html>
