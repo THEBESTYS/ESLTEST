@@ -16,13 +16,15 @@ const EVALUATION_SCHEMA = {
 
 export class AIEvaluator {
   async analyzeSpeech(audioBlob: Blob, targetText: string): Promise<EvaluationResult> {
+    // 매 호출마다 최신 API 키를 확인합니다.
     const apiKey = process.env.API_KEY;
     
-    if (!apiKey) {
-      return this.getErrorResult("API 연결 설정 중입니다. 버튼을 다시 한 번 눌러주시거나 잠시만 기다려주세요.");
+    if (!apiKey || apiKey === "") {
+      return this.getErrorResult("API_KEY_MISSING");
     }
 
     try {
+      // 매번 새로운 인스턴스를 생성하여 키 업데이트를 반영합니다.
       const ai = new GoogleGenAI({ apiKey });
 
       const base64Data = await new Promise<string>((resolve, reject) => {
@@ -68,13 +70,13 @@ export class AIEvaluator {
       
       const errMsg = error.message || "";
       if (errMsg.includes("Requested entity was not found")) {
-        return this.getErrorResult("구글 프로젝트 설정이 아직 서버에 반영 중입니다. 10초 정도 후에 다시 시도해주세요.");
+        return this.getErrorResult("구글 서버가 프로젝트 설정을 반영 중입니다. 약 5~10초만 기다린 후 다시 녹음해 주세요.");
       }
-      if (errMsg.includes("API key") || errMsg.includes("403")) {
-        return this.getErrorResult("API 키가 아직 활성화되지 않았습니다. 프로젝트 선택창에서 결제 정보가 포함된 프로젝트인지 다시 한 번 확인해주세요.");
+      if (errMsg.includes("API key") || errMsg.includes("403") || errMsg.includes("invalid")) {
+        return this.getErrorResult("API_KEY_INVALID");
       }
       
-      return this.getErrorResult("음성 분석 중 일시적인 오류가 발생했습니다. 다시 한 번 녹음해 주세요.");
+      return this.getErrorResult("음성 분석 중 오류가 발생했습니다. 다시 한 번 녹음해 주시면 감사하겠습니다.");
     }
   }
 
