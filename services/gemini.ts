@@ -15,17 +15,34 @@ const EVALUATION_SCHEMA = {
 };
 
 export class AIEvaluator {
-  private ai: GoogleGenAI;
+  private ai: GoogleGenAI | null = null;
 
   constructor() {
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+    // API_KEY는 환경 변수에서 주입됩니다.
+    const apiKey = process.env.API_KEY;
+    if (apiKey) {
+      this.ai = new GoogleGenAI({ apiKey });
+    } else {
+      console.warn("API_KEY not found in environment variables.");
+    }
   }
 
   async analyzeSpeech(audioBlob: Blob, targetText: string): Promise<EvaluationResult> {
+    if (!this.ai) {
+      return {
+        accuracy: 0,
+        intonation: 0,
+        fluency: 0,
+        transcribed: "[API Key missing]",
+        feedback: "API 키 설정이 필요합니다.",
+      };
+    }
+
     const reader = new FileReader();
     const base64AudioPromise = new Promise<string>((resolve) => {
       reader.onloadend = () => {
-        const base64 = (reader.result as string).split(',')[1];
+        const result = reader.result as string;
+        const base64 = result.split(',')[1];
         resolve(base64);
       };
       reader.readAsDataURL(audioBlob);
@@ -59,11 +76,10 @@ export class AIEvaluator {
         },
       });
 
-      const resultText = response.text || "";
+      const resultText = response.text || "{}";
       return JSON.parse(resultText) as EvaluationResult;
     } catch (error) {
       console.error("AI Evaluation failed:", error);
-      // Fallback
       return {
         accuracy: 0,
         intonation: 0,
