@@ -17,26 +17,21 @@ const Test: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<EvaluationResult[]>([]);
   const [errorToast, setErrorToast] = useState<string | null>(null);
-  const [needsConnection, setNeedsConnection] = useState(false);
-
-  // 컴포넌트 마운트 시 마이크 권한 미리 확인
-  useEffect(() => {
-    navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {
-      setErrorToast("마이크 권한이 거부되었습니다. 원활한 테스트를 위해 마이크를 허용해 주세요.");
-    });
-  }, []);
+  const [statusType, setStatusType] = useState<'error' | 'pending' | 'none'>('none');
 
   const handleOpenKeySelector = async () => {
     setErrorToast(null);
-    setNeedsConnection(false);
+    setStatusType('none');
     
     const aiStudio = (window as any).aistudio;
     if (aiStudio) {
       try {
         await aiStudio.openSelectKey();
-        // 키 선택 후 즉시 에러 상태를 해제하여 다시 시도할 수 있게 함
+        // 선택 후에는 자동으로 성공했다고 가정하고 UI를 리셋합니다.
+        setErrorToast("프로젝트가 선택되었습니다. 10초만 기다린 후 다시 말씀해 보세요.");
+        setStatusType('pending');
       } catch (e) {
-        console.error("Key selection failed", e);
+        console.error("Key selector error", e);
       }
     } else {
       window.open('https://aistudio.google.com/app/apikey', '_blank');
@@ -46,11 +41,12 @@ const Test: React.FC = () => {
   const handleStartRecording = async () => {
     try {
       setErrorToast(null);
-      setNeedsConnection(false);
+      setStatusType('none');
       await audioManager.startRecording();
       setIsRecording(true);
     } catch (error) {
-      setErrorToast("마이크를 사용할 수 없습니다. 설정을 확인해 주세요.");
+      setErrorToast("마이크 연결을 확인해 주세요.");
+      setStatusType('error');
     }
   };
 
@@ -63,24 +59,41 @@ const Test: React.FC = () => {
       const audioBlob = await audioManager.stopRecording();
       const evaluation = await aiEvaluator.analyzeSpeech(audioBlob, TEST_SENTENCES[currentIndex].text);
       
-      // API 키 관련 특수 에러 처리 (사용자를 내쫓지 않음)
-      if (evaluation.feedback === "API_KEY_MISSING" || evaluation.feedback === "API_KEY_INVALID") {
-        setErrorToast("구글 AI 프로젝트 연결이 필요합니다. 아래 버튼을 눌러 프로젝트를 선택해 주세요.");
-        setNeedsConnection(true);
+      // 상태별 대응 로직
+      if (evaluation.feedback === "API_KEY_MISSING") {
+        setErrorToast("먼저 AI 프로젝트를 연결해야 합니다.");
+        setStatusType('error');
         setIsAnalyzing(false);
         return;
       }
 
-      // 서버 반영 대기 중 에러 (Entity not found 등)
+      if (evaluation.feedback === "API_PROJECT_PENDING") {
+        setErrorToast("구글 서버가 프로젝트 정보를 반영 중입니다. 약 10초 후 다시 시도해 주세요.");
+        setStatusType('pending');
+        setIsAnalyzing(false);
+        return;
+      }
+
+      if (evaluation.feedback === "API_KEY_INVALID") {
+        setErrorToast("유효하지 않은 프로젝트입니다. 다른 프로젝트를 선택해 주세요.");
+        setStatusType('error');
+        setIsAnalyzing(false);
+        return;
+      }
+
+      // 분석 실패 (소리가 작거나 인식이 안 될 때)
       if (evaluation.accuracy === 0 && evaluation.transcribed === "[분석 실패]") {
-        setErrorToast(evaluation.feedback);
+        setErrorToast("목소리가 잘 들리지 않습니다. 조금 더 크게 말씀해 주세요.");
+        setStatusType('none');
         setIsAnalyzing(false);
         return;
       }
 
-      // 분석 성공 - 결과 저장 및 다음 문장 이동
+      // 성공
       const newResults = [...results, evaluation];
       setResults(newResults);
+      setErrorToast(null);
+      setStatusType('none');
 
       if (currentIndex < TEST_SENTENCES.length - 1) {
         setCurrentIndex(prev => prev + 1);
@@ -89,7 +102,8 @@ const Test: React.FC = () => {
         finishTest(newResults);
       }
     } catch (error: any) {
-      setErrorToast("분석 중 오류가 발생했습니다. 다시 한 번 말씀해 주세요.");
+      setErrorToast("연결 상태가 불안정합니다. 다시 시도해 주세요.");
+      setStatusType('error');
       setIsAnalyzing(false);
     }
   };
@@ -123,53 +137,43 @@ const Test: React.FC = () => {
   return (
     <div className="flex-grow flex flex-col items-center justify-center p-4 bg-slate-50">
       <div className="max-w-3xl w-full">
-        {/* 상단 진행 표시줄 */}
+        {/* 프로그레스 바 */}
         <div className="mb-8">
-          <div className="flex justify-between items-center mb-2 text-xs font-black text-slate-400">
-            <span className="uppercase tracking-widest">Question {currentIndex + 1} / {TEST_SENTENCES.length}</span>
-            <span className="text-blue-600">{Math.round((currentIndex / TEST_SENTENCES.length) * 100)}%</span>
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Sentence {currentIndex + 1} / {TEST_SENTENCES.length}</span>
+            <span className="text-sm font-black text-blue-600">{Math.round((currentIndex / TEST_SENTENCES.length) * 100)}%</span>
           </div>
-          <div className="w-full h-3 bg-white rounded-full p-1 shadow-inner border border-slate-100">
-            <div 
-              className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-700 ease-out shadow-sm" 
-              style={{ width: `${((currentIndex + 1) / TEST_SENTENCES.length) * 100}%` }} 
-            />
+          <div className="h-2 w-full bg-white rounded-full p-0.5 shadow-inner border border-slate-100">
+            <div className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-full transition-all duration-700" style={{ width: `${((currentIndex + 1) / TEST_SENTENCES.length) * 100}%` }} />
           </div>
         </div>
 
-        {/* 안내/에러 메시지 영역 */}
-        <div className="min-h-[80px] mb-6">
+        {/* 안내 메시지 영역 */}
+        <div className="min-h-[120px] mb-6 flex items-center justify-center">
           {errorToast ? (
-            <div className="p-5 bg-white border-2 border-red-100 rounded-[2rem] shadow-xl shadow-red-50 text-center animate-in fade-in slide-in-from-top-4 duration-300">
-              <p className="text-red-600 font-bold text-sm mb-3">⚠️ {errorToast}</p>
-              {needsConnection && (
-                <button 
-                  onClick={handleOpenKeySelector}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 rounded-xl text-sm font-black transition-all shadow-lg shadow-blue-100 active:scale-95"
-                >
-                  AI 프로젝트 연결하기
-                </button>
-              )}
+            <div className={`w-full p-6 rounded-[2.5rem] shadow-xl text-center animate-in zoom-in-95 duration-300 ${statusType === 'pending' ? 'bg-amber-50 border-2 border-amber-200 shadow-amber-100/50' : 'bg-white border-2 border-red-50 shadow-red-100/50'}`}>
+              <div className={`font-black text-sm mb-4 flex items-center justify-center gap-2 ${statusType === 'pending' ? 'text-amber-700' : 'text-red-600'}`}>
+                {statusType === 'pending' ? '⏳' : '⚠️'} {errorToast}
+              </div>
+              <button 
+                onClick={handleOpenKeySelector}
+                className={`px-8 py-3 rounded-2xl text-sm font-black transition-all shadow-lg active:scale-95 ${statusType === 'pending' ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-amber-200' : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200'}`}
+              >
+                {statusType === 'pending' ? '다른 프로젝트 선택하기' : 'AI 프로젝트 연결하기'}
+              </button>
             </div>
           ) : (
-            <div className="text-center py-4 text-slate-400 font-medium text-sm">
-              {isRecording ? "목소리를 듣고 있습니다... 문장을 끝까지 읽어주세요." : "준비가 되었다면 아래 버튼을 누른 채 말씀해 보세요."}
-            </div>
+            <p className="text-center text-slate-400 font-bold text-sm">
+              {isRecording ? "녹음 중... 문장을 읽고 버튼을 떼세요." : "버튼을 꾹 누르고 문장을 읽어주세요."}
+            </p>
           )}
         </div>
 
-        {/* 메인 문장 카드 */}
-        <div className="bg-white rounded-[3rem] shadow-2xl shadow-blue-100/50 border border-slate-100 p-10 md:p-20 text-center relative overflow-hidden">
-          {/* 장식용 배경 */}
-          <div className="absolute top-0 right-0 p-8 opacity-5">
-            <svg className="w-32 h-32" viewBox="0 0 24 24" fill="currentColor"><path d="M14 17h2v2h-2v-2zm-2-4h2v2h-2v-2zm2-4h2v2h-2V9zm-2-4h2v2h-2V5zm-2 4h2v2h-2V9zm0 4h2v2h-2v-2zM6 9h2v2H6V9zm0 4h2v2H6v-2zm10-4h2v2h-2V9zM6 17h2v2H6v-2zm10 0h2v2h-2v-2zM6 5h2v2H6V5zm4 0h2v2h-2V5zm4 0h2v2h-2V5zm4 0h2v2h-2V5z"/></svg>
-          </div>
-
+        {/* 카드 영역 */}
+        <div className="bg-white rounded-[4rem] shadow-2xl shadow-blue-100/40 border border-slate-100 p-12 md:p-24 text-center relative">
           <div className="mb-16">
-            <span className="inline-block px-4 py-1 bg-blue-50 text-blue-600 rounded-full text-[10px] font-black uppercase mb-4 tracking-widest">Target Sentence</span>
-            <h2 className="text-3xl md:text-5xl font-black text-slate-800 leading-tight">
-              "{TEST_SENTENCES[currentIndex].text}"
-            </h2>
+            <span className="inline-block px-4 py-1.5 bg-blue-50 text-blue-600 rounded-full text-[10px] font-black uppercase mb-6 tracking-widest border border-blue-100">AI Level Test</span>
+            <h2 className="text-3xl md:text-5xl font-black text-slate-800 leading-tight">"{TEST_SENTENCES[currentIndex].text}"</h2>
           </div>
 
           <div className="flex flex-col items-center">
@@ -179,51 +183,24 @@ const Test: React.FC = () => {
                 onMouseUp={handleStopRecording}
                 onTouchStart={handleStartRecording}
                 onTouchEnd={handleStopRecording}
-                className={`group relative w-36 h-36 rounded-full flex items-center justify-center transition-all duration-500 ease-out ${
-                  isRecording 
-                    ? 'bg-red-500 scale-110 shadow-2xl shadow-red-200' 
-                    : 'bg-blue-600 hover:bg-blue-700 shadow-2xl shadow-blue-200'
-                }`}
+                className={`w-40 h-40 rounded-full flex items-center justify-center transition-all duration-500 shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-200' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-200'}`}
               >
-                {isRecording ? (
-                  <div className="w-14 h-14 bg-white rounded-2xl animate-pulse shadow-inner" />
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                )}
-                {isRecording && (
-                  <div className="absolute inset-0 rounded-full border-[10px] border-red-200 animate-ping opacity-50" />
-                )}
+                {isRecording ? <div className="w-16 h-16 bg-white rounded-3xl animate-pulse" /> : <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>}
               </button>
             ) : (
-              <div className="flex flex-col items-center py-8">
-                <div className="relative">
-                  <div className="w-20 h-20 border-[6px] border-blue-100 rounded-full" />
-                  <div className="absolute inset-0 w-20 h-20 border-[6px] border-blue-600 border-t-transparent rounded-full animate-spin" />
-                </div>
-                <p className="mt-6 text-blue-600 font-black text-2xl animate-pulse">AI 분석 중...</p>
+              <div className="flex flex-col items-center py-6">
+                <div className="w-20 h-20 border-8 border-blue-600 border-t-transparent rounded-full animate-spin mb-6" />
+                <p className="text-blue-600 font-black text-2xl animate-pulse">분석 중...</p>
               </div>
             )}
-            <p className="mt-12 text-slate-400 font-bold text-lg">
-              {isRecording ? "녹음 중입니다... 문장을 모두 읽고 버튼을 떼세요." : "버튼을 꾹 누른 상태로 말씀해 주세요."}
-            </p>
           </div>
         </div>
 
-        {/* 하단 보조 도구 */}
-        <div className="mt-10 flex flex-col items-center space-y-4">
-          <button 
-            onClick={() => {
-              if(confirm("테스트를 중단하고 홈으로 돌아가시겠습니까?")) navigate('/');
-            }}
-            className="text-sm font-bold text-slate-400 hover:text-slate-600 transition-colors"
-          >
-            테스트 중단하기
-          </button>
-          <div className="flex items-center gap-4 py-2 px-6 bg-white rounded-full border border-slate-100 shadow-sm">
-             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">AI Engine Live Status: Active</span>
+        <div className="mt-12 flex flex-col items-center space-y-4">
+          <button onClick={() => navigate('/')} className="text-sm font-black text-slate-300 hover:text-slate-500 transition-colors uppercase tracking-widest">Cancel Test</button>
+          <div className="px-6 py-2 bg-white rounded-full border border-slate-100 shadow-sm flex items-center gap-3">
+             <div className="w-2 h-2 rounded-full bg-emerald-500" />
+             <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest tracking-tighter">AI Engine Status: Live</span>
           </div>
         </div>
       </div>

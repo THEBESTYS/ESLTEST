@@ -16,15 +16,15 @@ const EVALUATION_SCHEMA = {
 
 export class AIEvaluator {
   async analyzeSpeech(audioBlob: Blob, targetText: string): Promise<EvaluationResult> {
-    // 실시간으로 process.env.API_KEY를 참조합니다.
+    // 호출 시점에 주입된 최신 API KEY를 사용합니다.
     const apiKey = process.env.API_KEY;
     
-    // 키가 없는 경우 명확한 상태 코드를 반환합니다.
-    if (!apiKey || apiKey.length < 5) {
+    if (!apiKey || apiKey.trim() === "") {
       return this.getErrorResult("API_KEY_MISSING");
     }
 
     try {
+      // 매번 새로운 인스턴스를 생성하여 세션 동기화 문제를 방지합니다.
       const ai = new GoogleGenAI({ apiKey });
 
       const base64Data = await new Promise<string>((resolve, reject) => {
@@ -49,7 +49,7 @@ export class AIEvaluator {
                 },
               },
               {
-                text: `You are an English teacher. Evaluate this audio based on the text: "${targetText}". Return JSON with scores (0-100) for accuracy, intonation, fluency, the transcription, and Korean feedback.`,
+                text: `Evaluate this English speaking for the sentence: "${targetText}". Return JSON with accuracy, intonation, fluency (0-100), transcribed text, and Korean feedback.`,
               },
             ],
           },
@@ -66,18 +66,20 @@ export class AIEvaluator {
 
       return JSON.parse(resultText.trim()) as EvaluationResult;
     } catch (error: any) {
-      console.error("Gemini Analysis Detail Error:", error);
+      console.error("Gemini API Error Detail:", error);
       
       const errMsg = error.message || "";
-      // 구글의 지침에 따라 'entity not found' 시 키 선택 유도
+      
+      // 프로젝트 생성 직후 또는 유효하지 않은 프로젝트일 때 발생하는 핵심 에러
       if (errMsg.includes("Requested entity was not found")) {
-        return this.getErrorResult("구글 프로젝트 설정이 아직 활성화되지 않았습니다. 약 10초만 기다린 후 다시 녹음해 주세요.");
+        return this.getErrorResult("API_PROJECT_PENDING");
       }
+      
       if (errMsg.includes("API key") || errMsg.includes("403") || errMsg.includes("invalid")) {
         return this.getErrorResult("API_KEY_INVALID");
       }
       
-      return this.getErrorResult("음성을 분석하는 중 일시적인 오류가 발생했습니다. 다시 한 번 말씀해 주세요.");
+      return this.getErrorResult("분석 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
     }
   }
 
