@@ -15,57 +15,46 @@ const EVALUATION_SCHEMA = {
 };
 
 export class AIEvaluator {
-  private ai: GoogleGenAI | null = null;
-
-  constructor() {
-    // API_KEY는 환경 변수에서 주입됩니다.
-    const apiKey = process.env.API_KEY;
-    if (apiKey) {
-      this.ai = new GoogleGenAI({ apiKey });
-    } else {
-      console.warn("API_KEY not found in environment variables.");
-    }
-  }
-
   async analyzeSpeech(audioBlob: Blob, targetText: string): Promise<EvaluationResult> {
-    if (!this.ai) {
-      return {
-        accuracy: 0,
-        intonation: 0,
-        fluency: 0,
-        transcribed: "[API Key missing]",
-        feedback: "API 키 설정이 필요합니다.",
-      };
+    // API_KEY는 시스템에 의해 process.env.API_KEY로 자동 주입됩니다.
+    const apiKey = process.env.API_KEY;
+    
+    if (!apiKey) {
+      console.error("API_KEY is not available in the environment.");
+      return this.getErrorResult("API 키를 찾을 수 없습니다. 환경 설정을 확인해주세요.");
     }
 
-    const reader = new FileReader();
-    const base64AudioPromise = new Promise<string>((resolve) => {
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Blob 데이터를 Base64로 변환
+    const base64Data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
         const base64 = result.split(',')[1];
         resolve(base64);
       };
+      reader.onerror = reject;
       reader.readAsDataURL(audioBlob);
     });
 
-    const base64Data = await base64AudioPromise;
-
     try {
-      const response = await this.ai.models.generateContent({
+      const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: [
           {
             parts: [
               {
                 inlineData: {
-                  mimeType: audioBlob.type,
+                  mimeType: "audio/webm",
                   data: base64Data,
                 },
               },
               {
                 text: `You are an English pronunciation coach. The user was supposed to say: "${targetText}".
                 Evaluate the provided audio based on the target text.
-                Provide the evaluation in JSON format including accuracy (0-100), intonation (0-100), fluency (0-100), the transcribed text, and a short helpful feedback in Korean.`,
+                Compare the audio with the target text carefully.
+                Provide the evaluation in JSON format according to the schema.`,
               },
             ],
           },
@@ -76,17 +65,25 @@ export class AIEvaluator {
         },
       });
 
-      const resultText = response.text || "{}";
+      const resultText = response.text;
+      if (!resultText) {
+        throw new Error("Empty response from AI");
+      }
+
       return JSON.parse(resultText) as EvaluationResult;
     } catch (error) {
       console.error("AI Evaluation failed:", error);
-      return {
-        accuracy: 0,
-        intonation: 0,
-        fluency: 0,
-        transcribed: "[Error analyzing audio]",
-        feedback: "오류가 발생했습니다. 다시 시도해 주세요.",
-      };
+      return this.getErrorResult("분석 중 오류가 발생했습니다. 다시 시도해주세요.");
     }
+  }
+
+  private getErrorResult(message: string): EvaluationResult {
+    return {
+      accuracy: 0,
+      intonation: 0,
+      fluency: 0,
+      transcribed: "[Error]",
+      feedback: message,
+    };
   }
 }
