@@ -18,40 +18,33 @@ const Test: React.FC = () => {
   const [results, setResults] = useState<EvaluationResult[]>([]);
   const [errorToast, setErrorToast] = useState<string | null>(null);
   
-  // 브라우저 세션에 연결 상태를 임시 저장하여 새로고침 시에도 유지되도록 합니다.
+  // 브라우저 세션에 연결 상태를 저장하여 튕김을 방지합니다.
   const [hasKey, setHasKey] = useState<boolean>(() => {
     return !!process.env.API_KEY || sessionStorage.getItem('ai_connected') === 'true';
   });
-  const [isConnecting, setIsConnecting] = useState(false);
 
   useEffect(() => {
-    // 자동 감지는 '성공'일 때만 수행하고, 실패했다고 해서 hasKey를 false로 꺾지 않습니다.
+    // 백그라운드에서 조용히 키 상태를 업데이트합니다.
     const checkKey = async () => {
       const aiStudio = (window as any).aistudio;
       if (aiStudio && await aiStudio.hasSelectedApiKey()) {
-        setHasKey(true);
         sessionStorage.setItem('ai_connected', 'true');
+        if (!hasKey) setHasKey(true);
       }
     };
     checkKey();
-  }, []);
+  }, [hasKey]);
 
   const handleOpenKeySelector = async () => {
-    // [중요] 구글 지침: 버튼 클릭 시 즉시 성공으로 간주하고 진입합니다.
+    // 즉시 진입 허용
     setHasKey(true);
     sessionStorage.setItem('ai_connected', 'true');
     setErrorToast(null);
 
     const aiStudio = (window as any).aistudio;
     if (aiStudio) {
-      try {
-        setIsConnecting(true);
-        // await를 사용하지 않거나, 에러가 나도 무시하고 진행합니다.
-        aiStudio.openSelectKey().catch(() => {});
-        setIsConnecting(false);
-      } catch (e) {
-        setIsConnecting(false);
-      }
+      // 팝업을 띄우되 결과를 기다려 흐름을 막지 않습니다.
+      aiStudio.openSelectKey().catch(() => {});
     } else {
       window.open('https://aistudio.google.com/app/apikey', '_blank');
     }
@@ -63,7 +56,7 @@ const Test: React.FC = () => {
       await audioManager.startRecording();
       setIsRecording(true);
     } catch (error) {
-      setErrorToast("마이크 권한이 필요합니다. 브라우저 설정에서 마이크를 허용해주세요.");
+      setErrorToast("마이크 권한이 필요합니다. 브라우저 주소창 옆의 자물쇠 아이콘을 눌러 마이크를 허용해주세요.");
     }
   };
 
@@ -71,22 +64,24 @@ const Test: React.FC = () => {
     if (!isRecording) return;
     setIsRecording(false);
     setIsAnalyzing(true);
+    setErrorToast(null);
+
     try {
       const audioBlob = await audioManager.stopRecording();
       const evaluation = await aiEvaluator.analyzeSpeech(audioBlob, TEST_SENTENCES[currentIndex].text);
       
-      // 실제 호출 시점에 키가 유효하지 않은 경우에만 다시 연결 화면으로 보냅니다.
-      if (evaluation.accuracy === 0 && (evaluation.feedback.includes("API 키") || evaluation.feedback.includes("403"))) {
-        setHasKey(false);
-        sessionStorage.removeItem('ai_connected');
-        setErrorToast("API 키가 아직 활성화되지 않았거나 권한이 없습니다. 다시 프로젝트를 선택해주세요.");
+      // 분석 실패 시 (키 문제 포함)
+      if (evaluation.accuracy === 0 && evaluation.transcribed === "[분석 실패]") {
+        setErrorToast(evaluation.feedback);
         setIsAnalyzing(false);
+        // 여기서 setHasKey(false)를 하지 않음으로써 튕김 방지
         return;
       }
 
       const newResults = [...results, evaluation];
       setResults(newResults);
 
+      // 성공 시 다음 문장으로
       setTimeout(() => {
         if (currentIndex < TEST_SENTENCES.length - 1) {
           setCurrentIndex(prev => prev + 1);
@@ -94,9 +89,10 @@ const Test: React.FC = () => {
         } else {
           finishTest(newResults);
         }
-      }, 800);
-    } catch (error) {
-      setErrorToast("분석 중 오류가 발생했습니다. 다시 한 번 말씀해주세요.");
+      }, 500);
+    } catch (error: any) {
+      console.error("Test process error:", error);
+      setErrorToast("네트워크 연결이 불안정하거나 서버 응답이 늦어지고 있습니다. 잠시 후 다시 시도해주세요.");
       setIsAnalyzing(false);
     }
   };
@@ -127,6 +123,7 @@ const Test: React.FC = () => {
     navigate(`/result/${attempt.id}`);
   };
 
+  // 초기 진입 화면
   if (!hasKey) {
     return (
       <div className="flex-grow flex items-center justify-center p-6 bg-slate-50">
@@ -135,21 +132,12 @@ const Test: React.FC = () => {
             <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-6">
               🚀
             </div>
-            <h2 className="text-2xl font-black text-slate-800 mb-2">시작할 준비가 되셨나요?</h2>
+            <h2 className="text-2xl font-black text-slate-800 mb-2">테스트 준비 완료</h2>
             <p className="text-slate-500 mb-8 text-sm leading-relaxed">
-              구글 AI 프로젝트 선택을 완료하셨다면,<br/>아래 버튼을 눌러 즉시 테스트를 시작합니다.
+              구글 AI 스튜디오 설정이 끝나셨나요?<br/>바로 테스트를 시작해 보세요.
             </p>
           </div>
           
-          <div className="space-y-4 mb-10 text-left">
-            <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-              <p className="text-xs font-bold text-emerald-800 mb-1">💡 프로젝트를 이미 선택했다면?</p>
-              <p className="text-[11px] text-emerald-700 leading-relaxed">
-                시스템 반영까지 시간이 걸릴 수 있습니다. **'테스트 시작하기'** 버튼을 누르면 즉시 진입이 가능합니다.
-              </p>
-            </div>
-          </div>
-
           <button 
             onClick={handleOpenKeySelector}
             className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-black text-lg rounded-2xl shadow-lg shadow-blue-100 transition-all active:scale-95 flex items-center justify-center space-x-3"
@@ -164,9 +152,11 @@ const Test: React.FC = () => {
     );
   }
 
+  // 테스트 진행 화면
   return (
     <div className="flex-grow flex flex-col items-center justify-center p-4">
       <div className="max-w-3xl w-full">
+        {/* 상단 프로그레스 */}
         <div className="mb-8">
           <div className="flex justify-between items-center mb-2 text-sm font-bold">
             <span className="text-slate-400 uppercase tracking-tighter">Sentence {currentIndex + 1} / 50</span>
@@ -177,12 +167,15 @@ const Test: React.FC = () => {
           </div>
         </div>
 
+        {/* 에러 메시지 (튕기지 않고 화면에 표시) */}
         {errorToast && (
-          <div className="mb-4 p-4 bg-red-100 border border-red-200 text-red-700 rounded-2xl text-center text-sm font-bold animate-bounce">
-            {errorToast}
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl text-center text-sm font-medium animate-pulse">
+            ⚠️ {errorToast}
+            <div className="mt-2 text-xs opacity-70">문장을 다시 한 번 천천히 읽어주세요.</div>
           </div>
         )}
 
+        {/* 문장 카드 */}
         <div className="bg-white rounded-[40px] shadow-2xl shadow-slate-200 border border-slate-100 p-8 md:p-16 text-center">
           <div className="mb-12">
             <h2 className="text-3xl md:text-4xl font-black text-slate-800 leading-tight">
@@ -215,13 +208,28 @@ const Test: React.FC = () => {
             ) : (
               <div className="flex flex-col items-center py-6">
                 <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-6" />
-                <p className="text-blue-600 font-black text-xl animate-pulse">발음 분석 중...</p>
+                <p className="text-blue-600 font-black text-xl animate-pulse">AI가 발음을 듣고 있습니다...</p>
               </div>
             )}
             <p className="mt-10 text-slate-400 font-bold text-lg">
-              {isRecording ? "녹음 중... 손을 떼면 완료됩니다." : "버튼을 꾹 누른 채로 읽어주세요."}
+              {isRecording ? "녹음 중... 손을 떼면 분석이 시작됩니다." : "버튼을 꾹 누르고 읽으세요."}
             </p>
           </div>
+        </div>
+
+        {/* 하단 보조 메뉴 */}
+        <div className="mt-8 flex justify-center">
+          <button 
+            onClick={() => {
+              if(confirm("연결을 다시 설정하시겠습니까? 초기화면으로 이동합니다.")) {
+                sessionStorage.removeItem('ai_connected');
+                window.location.reload();
+              }
+            }}
+            className="text-xs text-slate-400 hover:text-slate-600 underline underline-offset-4"
+          >
+            AI 프로젝트 다시 연결하기
+          </button>
         </div>
       </div>
     </div>
