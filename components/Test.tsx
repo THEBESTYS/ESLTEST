@@ -17,32 +17,27 @@ const Test: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<EvaluationResult[]>([]);
   const [errorToast, setErrorToast] = useState<string | null>(null);
-  const [showKeyFixButton, setShowKeyFixButton] = useState(false);
-  
-  const [hasKey, setHasKey] = useState<boolean>(() => {
-    return !!process.env.API_KEY || sessionStorage.getItem('ai_connected') === 'true';
-  });
+  const [needsConnection, setNeedsConnection] = useState(false);
 
+  // 컴포넌트 마운트 시 마이크 권한 미리 확인
   useEffect(() => {
-    const checkKey = async () => {
-      const aiStudio = (window as any).aistudio;
-      if (aiStudio && await aiStudio.hasSelectedApiKey()) {
-        sessionStorage.setItem('ai_connected', 'true');
-        if (!hasKey) setHasKey(true);
-      }
-    };
-    checkKey();
-  }, [hasKey]);
+    navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {
+      setErrorToast("마이크 권한이 거부되었습니다. 원활한 테스트를 위해 마이크를 허용해 주세요.");
+    });
+  }, []);
 
   const handleOpenKeySelector = async () => {
-    setHasKey(true);
-    sessionStorage.setItem('ai_connected', 'true');
     setErrorToast(null);
-    setShowKeyFixButton(false);
-
+    setNeedsConnection(false);
+    
     const aiStudio = (window as any).aistudio;
     if (aiStudio) {
-      aiStudio.openSelectKey().catch(() => {});
+      try {
+        await aiStudio.openSelectKey();
+        // 키 선택 후 즉시 에러 상태를 해제하여 다시 시도할 수 있게 함
+      } catch (e) {
+        console.error("Key selection failed", e);
+      }
     } else {
       window.open('https://aistudio.google.com/app/apikey', '_blank');
     }
@@ -51,11 +46,11 @@ const Test: React.FC = () => {
   const handleStartRecording = async () => {
     try {
       setErrorToast(null);
-      setShowKeyFixButton(false);
+      setNeedsConnection(false);
       await audioManager.startRecording();
       setIsRecording(true);
     } catch (error) {
-      setErrorToast("마이크 권한이 필요합니다. 브라우저 설정에서 마이크를 허용해주세요.");
+      setErrorToast("마이크를 사용할 수 없습니다. 설정을 확인해 주세요.");
     }
   };
 
@@ -63,40 +58,38 @@ const Test: React.FC = () => {
     if (!isRecording) return;
     setIsRecording(false);
     setIsAnalyzing(true);
-    setErrorToast(null);
 
     try {
       const audioBlob = await audioManager.stopRecording();
       const evaluation = await aiEvaluator.analyzeSpeech(audioBlob, TEST_SENTENCES[currentIndex].text);
       
-      // API 키 관련 특수 에러 처리
+      // API 키 관련 특수 에러 처리 (사용자를 내쫓지 않음)
       if (evaluation.feedback === "API_KEY_MISSING" || evaluation.feedback === "API_KEY_INVALID") {
-        setErrorToast("구글 AI 프로젝트가 아직 연결되지 않았거나 승인 대기 중입니다.");
-        setShowKeyFixButton(true);
+        setErrorToast("구글 AI 프로젝트 연결이 필요합니다. 아래 버튼을 눌러 프로젝트를 선택해 주세요.");
+        setNeedsConnection(true);
         setIsAnalyzing(false);
         return;
       }
 
-      // 일반 분석 실패
+      // 서버 반영 대기 중 에러 (Entity not found 등)
       if (evaluation.accuracy === 0 && evaluation.transcribed === "[분석 실패]") {
         setErrorToast(evaluation.feedback);
         setIsAnalyzing(false);
         return;
       }
 
+      // 분석 성공 - 결과 저장 및 다음 문장 이동
       const newResults = [...results, evaluation];
       setResults(newResults);
 
-      setTimeout(() => {
-        if (currentIndex < TEST_SENTENCES.length - 1) {
-          setCurrentIndex(prev => prev + 1);
-          setIsAnalyzing(false);
-        } else {
-          finishTest(newResults);
-        }
-      }, 500);
+      if (currentIndex < TEST_SENTENCES.length - 1) {
+        setCurrentIndex(prev => prev + 1);
+        setIsAnalyzing(false);
+      } else {
+        finishTest(newResults);
+      }
     } catch (error: any) {
-      setErrorToast("네트워크 상태를 확인하고 다시 시도해 주세요.");
+      setErrorToast("분석 중 오류가 발생했습니다. 다시 한 번 말씀해 주세요.");
       setIsAnalyzing(false);
     }
   };
@@ -127,68 +120,54 @@ const Test: React.FC = () => {
     navigate(`/result/${attempt.id}`);
   };
 
-  if (!hasKey) {
-    return (
-      <div className="flex-grow flex items-center justify-center p-6 bg-slate-50">
-        <div className="max-w-md w-full bg-white rounded-[2.5rem] shadow-2xl shadow-blue-100 p-10 border border-slate-100">
-          <div className="text-center">
-            <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-6">🚀</div>
-            <h2 className="text-2xl font-black text-slate-800 mb-2">테스트 준비 완료</h2>
-            <p className="text-slate-500 mb-8 text-sm leading-relaxed">
-              구글 AI 프로젝트 선택을 완료하셨다면,<br/>아래 버튼을 눌러 즉시 테스트를 시작합니다.
-            </p>
-          </div>
-          <button 
-            onClick={handleOpenKeySelector}
-            className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-black text-lg rounded-2xl shadow-lg shadow-blue-100 transition-all active:scale-95 flex items-center justify-center space-x-3"
-          >
-            <span>테스트 시작하기</span>
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
-            </svg>
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex-grow flex flex-col items-center justify-center p-4">
+    <div className="flex-grow flex flex-col items-center justify-center p-4 bg-slate-50">
       <div className="max-w-3xl w-full">
+        {/* 상단 진행 표시줄 */}
         <div className="mb-8">
-          <div className="flex justify-between items-center mb-2 text-sm font-bold">
-            <span className="text-slate-400 uppercase tracking-tighter">Sentence {currentIndex + 1} / 50</span>
-            <span className="text-blue-600">{Math.round((currentIndex / 50) * 100)}%</span>
+          <div className="flex justify-between items-center mb-2 text-xs font-black text-slate-400">
+            <span className="uppercase tracking-widest">Question {currentIndex + 1} / {TEST_SENTENCES.length}</span>
+            <span className="text-blue-600">{Math.round((currentIndex / TEST_SENTENCES.length) * 100)}%</span>
           </div>
-          <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
-            <div className="h-full bg-blue-600 transition-all duration-500" style={{ width: `${(currentIndex / 50) * 100}%` }} />
+          <div className="w-full h-3 bg-white rounded-full p-1 shadow-inner border border-slate-100">
+            <div 
+              className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-700 ease-out shadow-sm" 
+              style={{ width: `${((currentIndex + 1) / TEST_SENTENCES.length) * 100}%` }} 
+            />
           </div>
         </div>
 
-        {errorToast && (
-          <div className="mb-6 p-6 bg-white border-2 border-amber-100 shadow-xl shadow-amber-50 rounded-[2rem] text-center">
-            <div className="text-amber-600 font-bold mb-3 flex items-center justify-center gap-2">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-              </svg>
-              {errorToast}
+        {/* 안내/에러 메시지 영역 */}
+        <div className="min-h-[80px] mb-6">
+          {errorToast ? (
+            <div className="p-5 bg-white border-2 border-red-100 rounded-[2rem] shadow-xl shadow-red-50 text-center animate-in fade-in slide-in-from-top-4 duration-300">
+              <p className="text-red-600 font-bold text-sm mb-3">⚠️ {errorToast}</p>
+              {needsConnection && (
+                <button 
+                  onClick={handleOpenKeySelector}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 rounded-xl text-sm font-black transition-all shadow-lg shadow-blue-100 active:scale-95"
+                >
+                  AI 프로젝트 연결하기
+                </button>
+              )}
             </div>
-            {showKeyFixButton ? (
-              <button 
-                onClick={handleOpenKeySelector}
-                className="bg-amber-600 hover:bg-amber-700 text-white px-6 py-2 rounded-xl text-sm font-black transition-all shadow-md shadow-amber-100"
-              >
-                ✅ 프로젝트 다시 확인하기
-              </button>
-            ) : (
-              <div className="text-xs text-slate-400">문장을 다시 한 번 천천히 읽어주세요.</div>
-            )}
-          </div>
-        )}
+          ) : (
+            <div className="text-center py-4 text-slate-400 font-medium text-sm">
+              {isRecording ? "목소리를 듣고 있습니다... 문장을 끝까지 읽어주세요." : "준비가 되었다면 아래 버튼을 누른 채 말씀해 보세요."}
+            </div>
+          )}
+        </div>
 
-        <div className="bg-white rounded-[40px] shadow-2xl shadow-slate-200 border border-slate-100 p-8 md:p-16 text-center">
-          <div className="mb-12">
-            <h2 className="text-3xl md:text-4xl font-black text-slate-800 leading-tight">
+        {/* 메인 문장 카드 */}
+        <div className="bg-white rounded-[3rem] shadow-2xl shadow-blue-100/50 border border-slate-100 p-10 md:p-20 text-center relative overflow-hidden">
+          {/* 장식용 배경 */}
+          <div className="absolute top-0 right-0 p-8 opacity-5">
+            <svg className="w-32 h-32" viewBox="0 0 24 24" fill="currentColor"><path d="M14 17h2v2h-2v-2zm-2-4h2v2h-2v-2zm2-4h2v2h-2V9zm-2-4h2v2h-2V5zm-2 4h2v2h-2V9zm0 4h2v2h-2v-2zM6 9h2v2H6V9zm0 4h2v2H6v-2zm10-4h2v2h-2V9zM6 17h2v2H6v-2zm10 0h2v2h-2v-2zM6 5h2v2H6V5zm4 0h2v2h-2V5zm4 0h2v2h-2V5zm4 0h2v2h-2V5z"/></svg>
+          </div>
+
+          <div className="mb-16">
+            <span className="inline-block px-4 py-1 bg-blue-50 text-blue-600 rounded-full text-[10px] font-black uppercase mb-4 tracking-widest">Target Sentence</span>
+            <h2 className="text-3xl md:text-5xl font-black text-slate-800 leading-tight">
               "{TEST_SENTENCES[currentIndex].text}"
             </h2>
           </div>
@@ -200,47 +179,51 @@ const Test: React.FC = () => {
                 onMouseUp={handleStopRecording}
                 onTouchStart={handleStartRecording}
                 onTouchEnd={handleStopRecording}
-                className={`group relative w-32 h-32 rounded-full flex items-center justify-center transition-all duration-300 ${
-                  isRecording ? 'bg-red-500 scale-110' : 'bg-blue-600 hover:bg-blue-700 shadow-xl shadow-blue-100'
+                className={`group relative w-36 h-36 rounded-full flex items-center justify-center transition-all duration-500 ease-out ${
+                  isRecording 
+                    ? 'bg-red-500 scale-110 shadow-2xl shadow-red-200' 
+                    : 'bg-blue-600 hover:bg-blue-700 shadow-2xl shadow-blue-200'
                 }`}
               >
                 {isRecording ? (
-                  <div className="w-12 h-12 bg-white rounded-xl animate-pulse" />
+                  <div className="w-14 h-14 bg-white rounded-2xl animate-pulse shadow-inner" />
                 ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-14 w-14 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                   </svg>
                 )}
                 {isRecording && (
-                  <div className="absolute inset-0 rounded-full border-8 border-red-200 animate-ping" />
+                  <div className="absolute inset-0 rounded-full border-[10px] border-red-200 animate-ping opacity-50" />
                 )}
               </button>
             ) : (
-              <div className="flex flex-col items-center py-6">
-                <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-6" />
-                <p className="text-blue-600 font-black text-xl animate-pulse">발음 분석 중...</p>
+              <div className="flex flex-col items-center py-8">
+                <div className="relative">
+                  <div className="w-20 h-20 border-[6px] border-blue-100 rounded-full" />
+                  <div className="absolute inset-0 w-20 h-20 border-[6px] border-blue-600 border-t-transparent rounded-full animate-spin" />
+                </div>
+                <p className="mt-6 text-blue-600 font-black text-2xl animate-pulse">AI 분석 중...</p>
               </div>
             )}
-            <p className="mt-10 text-slate-400 font-bold text-lg">
-              {isRecording ? "녹음 중... 손을 떼면 완료됩니다." : "버튼을 꾹 누르고 읽으세요."}
+            <p className="mt-12 text-slate-400 font-bold text-lg">
+              {isRecording ? "녹음 중입니다... 문장을 모두 읽고 버튼을 떼세요." : "버튼을 꾹 누른 상태로 말씀해 주세요."}
             </p>
           </div>
         </div>
 
-        <div className="mt-8 flex flex-col items-center space-y-2">
+        {/* 하단 보조 도구 */}
+        <div className="mt-10 flex flex-col items-center space-y-4">
           <button 
             onClick={() => {
-              if(confirm("연결을 다시 설정하시겠습니까? 초기화면으로 이동합니다.")) {
-                sessionStorage.removeItem('ai_connected');
-                window.location.reload();
-              }
+              if(confirm("테스트를 중단하고 홈으로 돌아가시겠습니까?")) navigate('/');
             }}
-            className="text-xs text-slate-400 hover:text-slate-600 underline underline-offset-4"
+            className="text-sm font-bold text-slate-400 hover:text-slate-600 transition-colors"
           >
-            AI 프로젝트 다시 연결하기
+            테스트 중단하기
           </button>
-          <div className="text-[10px] text-slate-300">
-            * 프로젝트 선택 창에서 반드시 결제가 설정된 프로젝트를 선택해야 분석이 가능합니다.
+          <div className="flex items-center gap-4 py-2 px-6 bg-white rounded-full border border-slate-100 shadow-sm">
+             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">AI Engine Live Status: Active</span>
           </div>
         </div>
       </div>
