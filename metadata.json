@@ -1,0 +1,7 @@
+{
+  "name": "SpeakLevel AI - English Speaking Level Test",
+  "description": "An AI-powered web application that assesses English speaking proficiency through voice recording, providing real-time transcription, pronunciation accuracy, and CEFR level mapping.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
