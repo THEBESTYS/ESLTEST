@@ -17,6 +17,7 @@ const Test: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<EvaluationResult[]>([]);
   const [permissionError, setPermissionError] = useState(false);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
 
   const currentSentence = TEST_SENTENCES[currentIndex];
   const progress = ((currentIndex) / TEST_SENTENCES.length) * 100;
@@ -24,6 +25,7 @@ const Test: React.FC = () => {
   const handleStartRecording = async () => {
     try {
       setPermissionError(false);
+      setErrorToast(null);
       await audioManager.startRecording();
       setIsRecording(true);
     } catch (error) {
@@ -39,10 +41,18 @@ const Test: React.FC = () => {
       const audioBlob = await audioManager.stopRecording();
 
       const evaluation = await aiEvaluator.analyzeSpeech(audioBlob, currentSentence.text);
+      
+      // API 키 오류나 치명적 오류가 발생한 경우 (점수가 모두 0점인 경우) 알림 표시
+      if (evaluation.accuracy === 0 && evaluation.feedback.includes("API")) {
+        setErrorToast(evaluation.feedback);
+        setIsAnalyzing(false);
+        return;
+      }
+
       const newResults = [...results, evaluation];
       setResults(newResults);
 
-      // Automatic next after a brief delay
+      // 성공 시 다음 단계로 진행
       setTimeout(() => {
         if (currentIndex < TEST_SENTENCES.length - 1) {
           setCurrentIndex(prev => prev + 1);
@@ -50,9 +60,10 @@ const Test: React.FC = () => {
         } else {
           finishTest(newResults);
         }
-      }, 1500);
+      }, 800);
     } catch (error) {
       console.error("Evaluation failed", error);
+      setErrorToast("네트워크 오류가 발생했습니다. 다시 시도해 주세요.");
       setIsAnalyzing(false);
     }
   };
@@ -125,6 +136,13 @@ const Test: React.FC = () => {
             />
           </div>
         </div>
+
+        {/* Error Message Toast */}
+        {errorToast && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm flex items-center animate-bounce">
+            <span className="mr-2">⚠️</span> {errorToast}
+          </div>
+        )}
 
         {/* Main Test Card */}
         <div className="bg-white rounded-3xl shadow-xl shadow-slate-200 border border-slate-100 overflow-hidden">

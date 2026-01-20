@@ -21,6 +21,12 @@
       flex-direction: column;
     }
   </style>
+  <script>
+    // 시스템에서 주입하는 process.env.API_KEY가 정상적으로 동작하도록 보장합니다.
+    if (typeof window.process === 'undefined') {
+      window.process = { env: {} };
+    }
+  </script>
   <script type="importmap">
   {
     "imports": {

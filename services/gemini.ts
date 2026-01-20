@@ -16,31 +16,35 @@ const EVALUATION_SCHEMA = {
 
 export class AIEvaluator {
   async analyzeSpeech(audioBlob: Blob, targetText: string): Promise<EvaluationResult> {
-    // API_KEY는 시스템에 의해 process.env.API_KEY로 자동 주입됩니다.
-    const apiKey = process.env.API_KEY;
+    // 환경 변수로부터 API 키를 안전하게 가져옵니다.
+    const apiKey = (window as any).process?.env?.API_KEY || (process as any)?.env?.API_KEY;
     
     if (!apiKey) {
-      console.error("API_KEY is not available in the environment.");
-      return this.getErrorResult("API 키를 찾을 수 없습니다. 환경 설정을 확인해주세요.");
+      console.error("Critical: API_KEY is missing from the environment.");
+      return this.getErrorResult("API 키가 설정되지 않았습니다. 관리자에게 문의하세요.");
     }
 
-    const ai = new GoogleGenAI({ apiKey });
-
-    // Blob 데이터를 Base64로 변환
-    const base64Data = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        const base64 = result.split(',')[1];
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(audioBlob);
-    });
-
     try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      // Blob 데이터를 Base64로 변환
+      const base64Data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result as string;
+          if (typeof result === 'string') {
+            resolve(result.split(',')[1]);
+          } else {
+            reject(new Error("Failed to read audio blob as base64"));
+          }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(audioBlob);
+      });
+
+      // 발음 분석을 위해 더 강력한 Gemini 3 Pro 모델 사용
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3-pro-preview",
         contents: [
           {
             parts: [
@@ -51,10 +55,14 @@ export class AIEvaluator {
                 },
               },
               {
-                text: `You are an English pronunciation coach. The user was supposed to say: "${targetText}".
-                Evaluate the provided audio based on the target text.
-                Compare the audio with the target text carefully.
-                Provide the evaluation in JSON format according to the schema.`,
+                text: `Evaluate the English speaking attempt. 
+                Target Sentence: "${targetText}"
+                Analyze the user's audio for:
+                1. Accuracy: How correctly words are pronounced.
+                2. Intonation: Rhythm, stress, and flow.
+                3. Fluency: Smoothness and natural speed.
+                
+                Respond ONLY with a JSON object containing accuracy, intonation, fluency, transcribed text, and helpful feedback in Korean.`,
               },
             ],
           },
@@ -62,18 +70,23 @@ export class AIEvaluator {
         config: {
           responseMimeType: "application/json",
           responseSchema: EVALUATION_SCHEMA,
+          temperature: 0.1, // 일관된 평가를 위해 낮은 창의성 설정
         },
       });
 
       const resultText = response.text;
-      if (!resultText) {
-        throw new Error("Empty response from AI");
-      }
+      if (!resultText) throw new Error("No response text from Gemini");
 
-      return JSON.parse(resultText) as EvaluationResult;
-    } catch (error) {
+      return JSON.parse(resultText.trim()) as EvaluationResult;
+    } catch (error: any) {
       console.error("AI Evaluation failed:", error);
-      return this.getErrorResult("분석 중 오류가 발생했습니다. 다시 시도해주세요.");
+      
+      // 구체적인 에러 메시지 처리
+      if (error.message?.includes("403") || error.message?.includes("API key")) {
+        return this.getErrorResult("API 키 권한 문제로 분석이 거부되었습니다.");
+      }
+      
+      return this.getErrorResult("분석 중 오류가 발생했습니다. 다시 한번 녹음해 주세요.");
     }
   }
 
@@ -82,7 +95,7 @@ export class AIEvaluator {
       accuracy: 0,
       intonation: 0,
       fluency: 0,
-      transcribed: "[Error]",
+      transcribed: "[분석 실패]",
       feedback: message,
     };
   }
