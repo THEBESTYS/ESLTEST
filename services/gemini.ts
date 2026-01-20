@@ -16,42 +16,28 @@ const EVALUATION_SCHEMA = {
 
 export class AIEvaluator {
   async analyzeSpeech(audioBlob: Blob, targetText: string): Promise<EvaluationResult> {
-    // 1. 시스템 주입 API Key 확인
     const apiKey = process.env.API_KEY;
     
-    // 2. 키가 없는 경우 플랫폼 선택 도구 확인
-    const aiStudio = (window as any).aistudio;
-    if (!apiKey && aiStudio) {
-      const hasKey = await aiStudio.hasSelectedApiKey();
-      if (!hasKey) {
-        await aiStudio.openSelectKey();
-        // 키 선택 창을 연 후에는 사용자에게 다시 시도하도록 안내하는 것이 안전합니다.
-        return this.getErrorResult("API 키가 설정되지 않았습니다. 상단 또는 팝업에서 키를 선택한 후 다시 시도해주세요.");
-      }
-    }
-
     if (!apiKey) {
-      return this.getErrorResult("API 키를 찾을 수 없습니다. 환경 설정을 확인하거나 키를 선택해주세요.");
+      const aiStudio = (window as any).aistudio;
+      if (aiStudio) await aiStudio.openSelectKey();
+      return this.getErrorResult("분석을 위해 API 키 선택이 필요합니다.");
     }
 
     try {
+      // 분석 호출마다 새로운 인스턴스를 생성하여 최신 주입된 키를 사용하도록 함
       const ai = new GoogleGenAI({ apiKey });
 
       const base64Data = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => {
           const result = reader.result as string;
-          if (typeof result === 'string') {
-            resolve(result.split(',')[1]);
-          } else {
-            reject(new Error("Failed to read audio blob as base64"));
-          }
+          resolve(result.split(',')[1]);
         };
         reader.onerror = reject;
         reader.readAsDataURL(audioBlob);
       });
 
-      // 가장 빠르고 호환성이 좋은 gemini-3-flash-preview 모델 사용
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: [
@@ -64,9 +50,7 @@ export class AIEvaluator {
                 },
               },
               {
-                text: `You are an English speaking level evaluator. 
-                Evaluate this audio based on the target sentence: "${targetText}".
-                Return a JSON object with accuracy, intonation, fluency, transcribed text, and helpful feedback in Korean.`,
+                text: `You are an English teacher. Evaluate this audio based on the text: "${targetText}". Return JSON with scores (0-100) for accuracy, intonation, fluency, the transcription, and Korean feedback.`,
               },
             ],
           },
@@ -79,19 +63,24 @@ export class AIEvaluator {
       });
 
       const resultText = response.text;
-      if (!resultText) throw new Error("No response text from Gemini");
+      if (!resultText) throw new Error("AI returned empty response");
 
       return JSON.parse(resultText.trim()) as EvaluationResult;
     } catch (error: any) {
-      console.error("AI Evaluation failed:", error);
+      console.error("AI Analysis error:", error);
       
-      // API Key 관련 특정 에러 발생 시 키 선택 창 다시 호출
-      if (error.message?.includes("API key") || error.message?.includes("not found")) {
+      const errorMessage = error.message || "";
+      // 특정 API 키 관련 오류(Requested entity was not found 등) 대응
+      if (errorMessage.includes("Requested entity was not found") || 
+          errorMessage.includes("API key") || 
+          errorMessage.includes("403")) {
+        
+        const aiStudio = (window as any).aistudio;
         if (aiStudio) await aiStudio.openSelectKey();
-        return this.getErrorResult("API 키가 유효하지 않거나 만료되었습니다. 키를 다시 선택해주세요.");
+        return this.getErrorResult("API 키 프로젝트가 올바르지 않거나 유료 설정이 필요합니다. 다시 선택해주세요.");
       }
       
-      return this.getErrorResult("분석 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+      return this.getErrorResult("일시적인 오류가 발생했습니다. 다시 시도해 주세요.");
     }
   }
 
