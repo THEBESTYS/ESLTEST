@@ -18,47 +18,42 @@ const Test: React.FC = () => {
   const [results, setResults] = useState<EvaluationResult[]>([]);
   const [errorToast, setErrorToast] = useState<string | null>(null);
   
-  // 초기 상태를 구글 시스템에 직접 물어봅니다.
-  const [hasKey, setHasKey] = useState<boolean>(false);
+  // 브라우저 세션에 연결 상태를 임시 저장하여 새로고침 시에도 유지되도록 합니다.
+  const [hasKey, setHasKey] = useState<boolean>(() => {
+    return !!process.env.API_KEY || sessionStorage.getItem('ai_connected') === 'true';
+  });
   const [isConnecting, setIsConnecting] = useState(false);
 
   useEffect(() => {
-    const checkActualKeyStatus = async () => {
+    // 자동 감지는 '성공'일 때만 수행하고, 실패했다고 해서 hasKey를 false로 꺾지 않습니다.
+    const checkKey = async () => {
       const aiStudio = (window as any).aistudio;
-      if (aiStudio) {
-        const isSelected = await aiStudio.hasSelectedApiKey();
-        if (isSelected) {
-          setHasKey(true);
-        }
-      } else if (process.env.API_KEY) {
-        // 로컬 환경이나 이미 주입된 경우
+      if (aiStudio && await aiStudio.hasSelectedApiKey()) {
         setHasKey(true);
+        sessionStorage.setItem('ai_connected', 'true');
       }
     };
-
-    checkActualKeyStatus();
-    // 주기적으로 체크하여 상태 변경을 감지합니다.
-    const interval = setInterval(checkActualKeyStatus, 1000);
-    return () => clearInterval(interval);
+    checkKey();
   }, []);
 
   const handleOpenKeySelector = async () => {
+    // [중요] 구글 지침: 버튼 클릭 시 즉시 성공으로 간주하고 진입합니다.
+    setHasKey(true);
+    sessionStorage.setItem('ai_connected', 'true');
+    setErrorToast(null);
+
     const aiStudio = (window as any).aistudio;
     if (aiStudio) {
       try {
         setIsConnecting(true);
-        await aiStudio.openSelectKey();
-        
-        // 중요: 구글 지침에 따라 선택 창을 닫으면 즉시 성공한 것으로 간주하고 진행합니다.
-        setHasKey(true);
+        // await를 사용하지 않거나, 에러가 나도 무시하고 진행합니다.
+        aiStudio.openSelectKey().catch(() => {});
         setIsConnecting(false);
       } catch (e) {
         setIsConnecting(false);
-        setErrorToast("키 선택 창을 여는 중 문제가 발생했습니다.");
       }
     } else {
       window.open('https://aistudio.google.com/app/apikey', '_blank');
-      setErrorToast("자동 키 선택이 지원되지 않는 환경입니다. 직접 키를 확인해주세요.");
     }
   };
 
@@ -68,7 +63,7 @@ const Test: React.FC = () => {
       await audioManager.startRecording();
       setIsRecording(true);
     } catch (error) {
-      setErrorToast("마이크 권한이 필요합니다.");
+      setErrorToast("마이크 권한이 필요합니다. 브라우저 설정에서 마이크를 허용해주세요.");
     }
   };
 
@@ -78,13 +73,13 @@ const Test: React.FC = () => {
     setIsAnalyzing(true);
     try {
       const audioBlob = await audioManager.stopRecording();
-      // 매번 분석 시점에 최신 API 인스턴스를 사용하도록 Evaluation 로직 내부에서 처리됨
       const evaluation = await aiEvaluator.analyzeSpeech(audioBlob, TEST_SENTENCES[currentIndex].text);
       
-      // 만약 키 문제로 분석이 실패했다면 다시 키 선택 화면으로 보냅니다.
-      if (evaluation.accuracy === 0 && evaluation.feedback.includes("API 키")) {
+      // 실제 호출 시점에 키가 유효하지 않은 경우에만 다시 연결 화면으로 보냅니다.
+      if (evaluation.accuracy === 0 && (evaluation.feedback.includes("API 키") || evaluation.feedback.includes("403"))) {
         setHasKey(false);
-        setErrorToast(evaluation.feedback);
+        sessionStorage.removeItem('ai_connected');
+        setErrorToast("API 키가 아직 활성화되지 않았거나 권한이 없습니다. 다시 프로젝트를 선택해주세요.");
         setIsAnalyzing(false);
         return;
       }
@@ -101,7 +96,7 @@ const Test: React.FC = () => {
         }
       }, 800);
     } catch (error) {
-      setErrorToast("분석 중 오류가 발생했습니다. 다시 시도해주세요.");
+      setErrorToast("분석 중 오류가 발생했습니다. 다시 한 번 말씀해주세요.");
       setIsAnalyzing(false);
     }
   };
@@ -138,34 +133,31 @@ const Test: React.FC = () => {
         <div className="max-w-md w-full bg-white rounded-[2.5rem] shadow-2xl shadow-blue-100 p-10 border border-slate-100">
           <div className="text-center">
             <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-6">
-              🛡️
+              🚀
             </div>
-            <h2 className="text-2xl font-black text-slate-800 mb-2">분석 준비 완료</h2>
+            <h2 className="text-2xl font-black text-slate-800 mb-2">시작할 준비가 되셨나요?</h2>
             <p className="text-slate-500 mb-8 text-sm leading-relaxed">
-              구글 AI 스튜디오에서 프로젝트를 선택하셨다면 아래 버튼을 눌러 바로 시작하세요.
+              구글 AI 프로젝트 선택을 완료하셨다면,<br/>아래 버튼을 눌러 즉시 테스트를 시작합니다.
             </p>
           </div>
           
           <div className="space-y-4 mb-10 text-left">
             <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-              <p className="text-xs font-bold text-emerald-800 mb-1">✅ 프로젝트 선택 확인</p>
+              <p className="text-xs font-bold text-emerald-800 mb-1">💡 프로젝트를 이미 선택했다면?</p>
               <p className="text-[11px] text-emerald-700 leading-relaxed">
-                이미 프로젝트를 선택하셨는데도 이 화면이 보인다면, 아래 버튼을 다시 한 번 눌러주세요. 시스템이 즉시 연결을 승인합니다.
+                시스템 반영까지 시간이 걸릴 수 있습니다. **'테스트 시작하기'** 버튼을 누르면 즉시 진입이 가능합니다.
               </p>
             </div>
           </div>
 
           <button 
             onClick={handleOpenKeySelector}
-            disabled={isConnecting}
-            className={`w-full py-4 ${isConnecting ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700'} text-white font-black text-lg rounded-2xl shadow-lg shadow-blue-100 transition-all active:scale-95 flex items-center justify-center space-x-3`}
+            className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-black text-lg rounded-2xl shadow-lg shadow-blue-100 transition-all active:scale-95 flex items-center justify-center space-x-3"
           >
-            <span>{isConnecting ? '연결 확인 중...' : '테스트 시작하기'}</span>
-            {!isConnecting && (
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
-              </svg>
-            )}
+            <span>테스트 시작하기</span>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
           </button>
         </div>
       </div>
@@ -185,21 +177,8 @@ const Test: React.FC = () => {
           </div>
         </div>
 
-        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center justify-center space-x-2 text-emerald-700 font-bold text-sm shadow-sm">
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-          </svg>
-          <span>AI 분석 엔진이 활성화되었습니다.</span>
-          <button 
-            onClick={() => setHasKey(false)} 
-            className="ml-4 text-[10px] underline opacity-60 hover:opacity-100"
-          >
-            연결 재설정
-          </button>
-        </div>
-
         {errorToast && (
-          <div className="mb-4 p-4 bg-red-100 border border-red-200 text-red-700 rounded-2xl text-center text-sm font-bold">
+          <div className="mb-4 p-4 bg-red-100 border border-red-200 text-red-700 rounded-2xl text-center text-sm font-bold animate-bounce">
             {errorToast}
           </div>
         )}
